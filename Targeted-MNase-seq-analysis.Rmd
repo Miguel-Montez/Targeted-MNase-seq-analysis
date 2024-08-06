@@ -1,0 +1,66 @@
+---
+title: "Targeted-MNase-seq-analysis"
+output: html_document
+date: "2024-08-06"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Install packages
+```{r}
+if (!require("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+BiocManager::install("Rsamtools")
+library(Rsamtools)
+install.packages("dplyr")
+library(dplyr)
+install.packages("ggplot2")
+library(ggplot2)
+```
+
+# Import data
+```{r}
+# Use the function scanBam() to import data from the gene-specific BAM files
+# The BAM files here correspond to WT cold samples and have been filtered for the FLC locus: chr5:3,172,382:3,181,949
+# To analyze any other region of interest, the BAM files and location must be modified.
+MNase_WT_cold_rep1_FLC_bam <- scanBam("~/R/Targeted-MNase-seq-analysis/MN-1W-1@AT5G10140_FLC.bam")
+MNase_WT_cold_rep2_FLC_bam <- scanBam("~/R/Targeted-MNase-seq-analysis/MN-1W-2@AT5G10140_FLC.bam")
+MNase_WT_cold_rep3_FLC_bam <- scanBam("~/R/Targeted-MNase-seq-analysis/MN-1W-3@AT5G10140_FLC.bam")
+MNase_WT_cold_rep4_FLC_bam <- scanBam("~/R/Targeted-MNase-seq-analysis/MN-1W-4@AT5G10140_FLC.bam")
+
+# Convert the data in the BAM files into a dataframe
+# The read pair id, insert leftmost coordinate, insert length are taken from the BAM file. The insert rightmost coordinate is computed as insert leftmost coordinate + insert length.
+MNase_WT_cold_rep1_FLC <- do.call(rbind.data.frame, MNase_WT_cold_rep1_FLC_bam) %>% filter(pos %in% c(3172382:3181949)) %>% dplyr::rename(read_id=qname, left_pos=pos, size=isize) %>% select(read_id, left_pos, size, seq) %>% mutate(left_pos=as.numeric(left_pos), size=as.numeric(size)) %>% filter(size>0) %>% mutate(genotype="WT", treatment="cold", bio_rep=1, right_pos=(left_pos+size))
+MNase_WT_cold_rep2_FLC <- do.call(rbind.data.frame, MNase_WT_cold_rep2_FLC_bam) %>% filter(pos %in% c(3172382:3181949)) %>% dplyr::rename(read_id=qname, left_pos=pos, size=isize) %>% select(read_id, left_pos, size, seq) %>% mutate(left_pos=as.numeric(left_pos), size=as.numeric(size)) %>% filter(size>0) %>% mutate(genotype="WT", treatment="cold", bio_rep=2, right_pos=(left_pos+size))
+MNase_WT_cold_rep3_FLC <- do.call(rbind.data.frame, MNase_WT_cold_rep3_FLC_bam) %>% filter(pos %in% c(3172382:3181949)) %>% dplyr::rename(read_id=qname, left_pos=pos, size=isize) %>% select(read_id, left_pos, size, seq) %>% mutate(left_pos=as.numeric(left_pos), size=as.numeric(size)) %>% filter(size>0) %>% mutate(genotype="WT", treatment="cold", bio_rep=3, right_pos=(left_pos+size))
+MNase_WT_cold_rep4_FLC <- do.call(rbind.data.frame, MNase_WT_cold_rep4_FLC_bam) %>% filter(pos %in% c(3172382:3181949)) %>% dplyr::rename(read_id=qname, left_pos=pos, size=isize) %>% select(read_id, left_pos, size, seq) %>% mutate(left_pos=as.numeric(left_pos), size=as.numeric(size)) %>% filter(size>0) %>% mutate(genotype="WT", treatment="cold", bio_rep=4, right_pos=(left_pos+size))
+
+detach("package:Rsamtools", unload=TRUE)
+```
+
+# Compute frequency of a nucleosomal DNA fragment among all the fragments on the locus
+```{r}
+# Combine data from different replicates in one dataframe
+MNase_dataframe <- bind_rows(MNase_WT_cold_rep1_FLC, MNase_WT_cold_rep2_FLC, MNase_WT_cold_rep3_FLC, MNase_WT_cold_rep4_FLC)
+# Compute the number of DNA fragments with the same leftmost and rightmost coordinates
+MNase_dataframe_n_fragments <- MNase_dataframe %>% filter(size %in% c(100:150)) %>% group_by(genotype, treatment, bio_rep, size) %>% count(left_pos, right_pos)
+# Compute the total number of DNA fragments
+MNase_dataframe_total_fragments <- MNase_dataframe_n_fragments %>% group_by(genotype, treatment, bio_rep) %>% summarise(total_n=sum(n))
+# Compute the frequency and average frequency across biological replicates
+MNase_dataframe_fragment_freq <- merge(MNase_dataframe_n_fragments, MNase_dataframe_total_fragments) %>% mutate(freq=n/total_n) %>% select(-n, -total_n)
+MNase_dataframe_fragment_freq_avg <- MNase_dataframe_fragment_freq %>% group_by(genotype, treatment, left_pos, right_pos, size) %>% summarise(freq_avg=mean(freq)) %>% ungroup() %>% arrange(freq_avg) %>% mutate(freq_avg_order=factor(freq_avg))
+```
+
+# Plot
+```{r}
+# Plot the average frequency
+# Each nucleosomal DNA fragment is plotted as a horizontal coloured segment along the x-axis (genomic coordinates). The fragment length is plotted on the y-axis.
+# Both segment colour and width scales are added to show the average frequency. 
+MNase_freq_plot <- ggplot(MNase_dataframe_fragment_freq_avg , aes(y=size)) + geom_linerange(aes(xmin=left_pos, xmax=right_pos, color=freq_avg, linewidth=freq_avg)) + scale_x_continuous(position="top", limits=c(3172529, 3181982), breaks=c(3173447, 3174447, 3175447, 3176447, 3177447, 3178447, 3179447, 3180447, 3181447), expand=expansion(mult=c(0.01, 0.01))) + scale_y_continuous(expand=expansion(mult=c(0.02, 0.02))) + labs(title="WT cold", x=NULL, y="DNA length (bp)", color="Avg freq", linewidth="Avg freq") + scale_color_viridis_c(trans="log10", limits=c(1.0e-05, 0.0025), na.value="#4B0055", breaks=c(0.002, 0.0002, 0.00001), labels=c("0.002", "0.0002", "<0.00001")) + scale_linewidth_continuous(trans="log10", limits=c(0.000000873, 0.0025), breaks=c(0.002, 0.0002, 0.00002), labels=c("0.002", "0.0002", "0.00002"), range=c(0, 2)) + theme(panel.background=element_rect(fill="black"), panel.grid=element_blank(), axis.title.y=element_text(size=8, color="black"), axis.text.y=element_text(size=7, color="black"), axis.text.x=element_blank(), axis.line=element_blank(), plot.title=element_text(hjust=0.05, size=7, face="bold", color="black"), legend.title=element_text(size=7, color="black"), legend.text=element_text(size=6, color="black"), legend.key=element_rect(fill="white"), legend.key.width=unit(0.3, "cm"), legend.key.height=unit(0.3, "cm"))
+
+MNase_freq_plot
+```
+
+
